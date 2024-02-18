@@ -90,32 +90,47 @@ public class HandlerImpl implements Handler {
 
     @Override
     public ApplicationStatusResponse performOperation(String id) {
-        ExecutorService executor = Executors.newCachedThreadPool();
-        CompletionService<ApplicationStatusResponse> pool = new ExecutorCompletionService<>(executor);
+        ExecutorService single = Executors.newSingleThreadExecutor();
+        Callable<ApplicationStatusResponse> callable = new Callable<ApplicationStatusResponse>() {
+            @Override
+            public ApplicationStatusResponse call() throws Exception {
+                ExecutorService executor = Executors.newCachedThreadPool();
+                CompletionService<ApplicationStatusResponse> pool = new ExecutorCompletionService<>(executor);
 
-        OperationTask task1 = new OperationTask(id, new Command1());
-        OperationTask task2 = new OperationTask(id, new Command2());
+                OperationTask task1 = new OperationTask(id, new Command1());
+                OperationTask task2 = new OperationTask(id, new Command2());
 
-        ApplicationStatusResponse result = null;
-        List<Future<ApplicationStatusResponse>> futures = new ArrayList<>(2);
-        try {
-            futures.add(pool.submit(task1));
-            futures.add(pool.submit(task2));
-            for (int i = 0; i < 2; i++) {
-                System.out.println("Getting result from completion service: " + (i+1));
-                result = pool.take().get(15, TimeUnit.SECONDS);
-                if (result instanceof ApplicationStatusResponse.Success) {
-                    break;
-                } else {
-                    result = getFailureResponse();
+                ApplicationStatusResponse result = null;
+                List<Future<ApplicationStatusResponse>> futures = new ArrayList<>(2);
+                try {
+                    futures.add(pool.submit(task1));
+                    futures.add(pool.submit(task2));
+                    for (int i = 0; i < 2; i++) {
+                        System.out.println("Getting result from completion service: " + (i+1));
+                        result = pool.take().get();
+                        if (result instanceof ApplicationStatusResponse.Success) {
+                            break;
+                        } else {
+                            result = getFailureResponse();
+                        }
+                    }
+                    executor.shutdown();
+                } catch (InterruptedException | ExecutionException e) {
+                    return getFailureResponse();
+                } finally {
+                    futures.forEach(future -> future.cancel(true));
                 }
+                return result;
             }
-            executor.shutdown();
+        };
+
+        Future<ApplicationStatusResponse> finalResult = single.submit(callable);
+        try {
+            return finalResult.get(15, TimeUnit.SECONDS);
         } catch (InterruptedException | ExecutionException | TimeoutException e) {
             return getFailureResponse();
         } finally {
-            futures.forEach(future -> future.cancel(true));
+            single.shutdown();
         }
-        return result;
     }
 }
